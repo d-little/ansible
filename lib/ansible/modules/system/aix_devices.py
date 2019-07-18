@@ -295,6 +295,58 @@ def remove_device(module, device, force, recursive, state):
 
     return changed, msg
 
+def change_defaults(module, attributes, dev_class, dev_subclass, dev_type):
+    """ Change AIX device defaults. """
+
+    """ vars are named dev_class|dev_subclass|dev_type to avoid
+    colliding with python's own `class` and `type` builtins. """
+    attr_changed = []
+    attr_not_changed = []
+    attr_invalid = []
+    attr_changed_msg = attr_not_changed_msg = attr_invalid_msg = ''
+    chdef_cmd = module.get_bin_path('chdef', required=True)
+    lsattr_cmd = module.get_bin_path('lsattr', required=True)
+
+    for attr, value in attributes.items():
+        # Check current 'attribute value' of class, subclass, type 
+        cmd = [lsattr_cmd, '-OD', '-c', dev_class, '-s', dev_subclass, '-t', dev_type, '-a', attribute]
+        rc, lsattr_out, err = module.run_command(cmd)
+        # `lsattr -OD with -c -s -t -a` will return something like:
+        #  #queue_depth
+        #  128
+        current_param = lsattr_out.splitlines()[1]
+        if current_param is None:
+            attr_invalid.append(attr)
+
+        elif current_param != new_value:
+            attrval = ''.join([attribute, '=', new_value])
+            cmd = [chdef_cmd, '-a', attrval, '-c', dev_class, '-s', dev_subclass, '-t', dev_type]
+
+            if not module.check_mode:
+                rc, chdef_out, err = module.run_command(cmd)
+                if rc != 0 or chdef_out != "%s changed" % attribute:
+                    msg = "Failed to run chdef: %s" % chdef_out
+                    module.exit_json(msg=msg, rc=rc, err=err)
+            attr_changed.append(attributes[attr])
+
+        else:
+            attr_not_changed.append(attributes[attr])
+
+    if attr_changed:
+        changed = True
+        attr_changed_msg = "Attributes changed: %s. " % ', '.join(attr_changed)
+    else:
+        changed = False
+
+    if attr_not_changed:
+        attr_not_changed_msg = "Attributes already set: %s. " % ', '.join(attr_not_changed)
+
+    if attr_invalid:
+        attr_invalid_msg = "Invalid attributes: %s " % ', '.join(attr_invalid)
+
+    msg = "%s%s%s" % (attr_changed_msg, attr_not_changed_msg, attr_invalid_msg)
+
+    return changed, msg
 
 def main():
 
@@ -302,6 +354,9 @@ def main():
         argument_spec=dict(
             attributes=dict(type='dict'),
             device=dict(type='str'),
+            dev_class=dict(type='str', default=None),
+            dev_subclass=dict(type='str', default=None),
+            dev_type=dict(type='str', default=None),
             force=dict(type='bool', default=False),
             recursive=dict(type='bool', default=False),
             state=dict(type='str', default='available', choices=['available', 'defined', 'removed']),
@@ -319,6 +374,10 @@ def main():
     force = force_opt[module.params['force']]
     recursive = module.params['recursive']
     state = module.params['state']
+    dev_class = module.params['dev_class']
+    dev_subclass = module.params['dev_subclass']
+    dev_type = module.params['dev_type']
+
 
     result = dict(
         changed=False,
@@ -327,12 +386,20 @@ def main():
 
     if state == 'available' or state == 'present':
         if attributes:
-            # change attributes on device
-            device_status, device_state = _check_device(module, device)
-            if device_status:
-                result['changed'], result['msg'] = change_device_attr(module, attributes, device, force)
+            if device == 'default':
+                # Change device attribute defaults using chdef
+                if None in [dev_class, dev_subclass, dev_type]:
+                    errmsg = "Class, Subclass, and Type must all be set when device is 'default'."
+                    module.fail_json(msg=msg, rc=rc, err=err)
+                result['changed'], result['msg'] = change_defaults(module, attributes, dev_class, dev_subclass, dev_type)
+
             else:
-                result['msg'] = "Device %s does not exist." % device
+                # change attributes on device
+                device_status, device_state = _check_device(module, device)
+                if device_status:
+                    result['changed'], result['msg'] = change_device_attr(module, attributes, device, force)
+                else:
+                    result['msg'] = "Device %s does not exist." % device
 
         else:
             # discovery devices (cfgmgr)
