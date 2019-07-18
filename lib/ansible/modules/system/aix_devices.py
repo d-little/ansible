@@ -303,34 +303,40 @@ def change_defaults(module, attributes, dev_class, dev_subclass, dev_type):
     attr_changed = []
     attr_not_changed = []
     attr_invalid = []
-    attr_changed_msg = attr_not_changed_msg = attr_invalid_msg = ''
+    attr_changed_msg = attr_not_changed_msg = attr_invalid_msg = attr_invalid_value = ''
     chdef_cmd = module.get_bin_path('chdef', required=True)
     lsattr_cmd = module.get_bin_path('lsattr', required=True)
 
     for attr, value in attributes.items():
-        # Check current 'attribute value' of class, subclass, type 
-        cmd = [lsattr_cmd, '-OD', '-c', dev_class, '-s', dev_subclass, '-t', dev_type, '-a', attribute]
+        # Check current 'attr value' of class, subclass, type 
+        cmd = [lsattr_cmd, '-OD', '-c', dev_class, '-s', dev_subclass, '-t', dev_type, '-a', attr]
         rc, lsattr_out, err = module.run_command(cmd)
         # `lsattr -OD with -c -s -t -a` will return something like:
         #  #queue_depth
         #  128
-        current_param = lsattr_out.splitlines()[1]
+        try:
+            current_param = lsattr_out.splitlines()[1]
+        except:
+            attr_invalid.append(attr)
+            continue
+
         if current_param is None:
             attr_invalid.append(attr)
 
-        elif current_param != new_value:
-            attrval = ''.join([attribute, '=', new_value])
+        elif str(current_param) != str(value):
+            tmpmsg.append([ current_param, '!=', value])
+            attrval = ''.join(map(str,[attr, '=', value]))
             cmd = [chdef_cmd, '-a', attrval, '-c', dev_class, '-s', dev_subclass, '-t', dev_type]
 
             if not module.check_mode:
                 rc, chdef_out, err = module.run_command(cmd)
-                if rc != 0 or chdef_out != "%s changed" % attribute:
-                    msg = "Failed to run chdef: %s" % chdef_out
+                if rc != 0:
+                    msg = "Failed to run chdef: %s" % ' '.join(cmd)
                     module.exit_json(msg=msg, rc=rc, err=err)
-            attr_changed.append(attributes[attr])
+            attr_changed.append(attr)
 
         else:
-            attr_not_changed.append(attributes[attr])
+            attr_not_changed.append(attr)
 
     if attr_changed:
         changed = True
@@ -344,8 +350,10 @@ def change_defaults(module, attributes, dev_class, dev_subclass, dev_type):
     if attr_invalid:
         attr_invalid_msg = "Invalid attributes: %s " % ', '.join(attr_invalid)
 
-    msg = "%s%s%s" % (attr_changed_msg, attr_not_changed_msg, attr_invalid_msg)
+    if attr_invalid_value:
+        attr_invalid_msg = "Invalid attributes: %s " % ', '.join(attr_invalid_value)
 
+    msg = "%s%s%s%s" % (attr_changed_msg, attr_not_changed_msg, attr_invalid_msg, attr_invalid_value)
     return changed, msg
 
 def main():
