@@ -75,6 +75,7 @@ ansible.egg-info/
 /test/integration/cloud-config-*.*
 !/test/integration/cloud-config-*.*.template
 .python-version
+/.devcontainer
 # Release directory
 packaging/release/ansible_release
 /.cache/
